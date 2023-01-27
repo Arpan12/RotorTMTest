@@ -13,7 +13,6 @@ class controller:
     def __init__(self):
         self.gd = np.zeros((0,0), dtype=float)
         self.icnt = None
-        
         # for hover_controller
         self.last_t = None
 
@@ -200,81 +199,89 @@ class controller:
     #                   Each dictionary contains a 1d ndarray with 4 elements denoting the desired orientation as unit quaternion
     # qd_rot_des      - a dictionary with (Number of MAV(s)) fields, with key '0', '1', '2', etc. 
     #                   Each dictionary contains a 3 by 3 ndarray denoting the desired orientation as rotation matrix
-
-        if not pl_params.sim_start:
-            self.icnt = 0
-        self.icnt = self.icnt + 1
-
-        # Parameter Initialization
-        quat_des = ql["quat_des"]
-        omega_des = ql["omega_des"]
-        g = pl_params.grav
-        m = pl_params.mass
-        nquad = pl_params.nquad
-
+        print("inside controller")
         e3 = np.array([[0],[0],[1.0]])
-
-        Rot = ql["rot"]
+        errPosLoad = ql["pos_des"] - ql["pos"]
+        errVelLoad = ql["vel_des"] - ql["vel"]
+        kp = pl_params.Kp
+        kd = pl_params.Kd
+        RLoad = ql["rot"]
         omega_asym = vec2asym(ql["omega"])
-        Rot_des = utilslib.QuatToRot(quat_des)
 
-        ## Position control
-        #  Position error
-        ep = ql["pos_des"]-ql["pos"]
-        # Velocity error
-        ed = ql["vel_des"]-ql["vel"]
+        RdesLoad = utilslib.QuatToRot(ql["quat_des"])
+        forceDesiredLoad = pl_params.mass*(kp@errPosLoad + kd@errVelLoad + ql["acc_des"]+pl_params.grav*e3)
 
-        # Desired acceleration This equation drives the errors of trajectory to zero.
-        acceleration_des = ql["acc_des"] + np.matmul(pl_params.Kp, ep) + np.matmul(pl_params.Kd, ed)
-        F = m*g*e3  + m*acceleration_des
+        eRLoad = 0.5*vee(RLoad.T@RdesLoad - RdesLoad.T@RLoad)
+        eOmega = RLoad.T@(RLoad@ql["omega_des"].T) - ql["omega"]
+        kRl = pl_params.Kpe
+        kOmegaL = pl_params.Kde
 
-        ## Attitude Control
-        # Errors of anlges and angular velocities
-        e_Rot = Rot_des.T @ Rot - Rot.T @ Rot_des
-        e_angle = np.divide(vee(e_Rot), 2)
-        e_omega = ql["omega"] - Rot.T @ Rot_des @ omega_des.T 
+        
+        JL = pl_params.I
+       
+        MomentDesiredLoad = kRl@eRLoad + kOmegaL@eOmega+vec2asym(RLoad.T@RdesLoad@ql["omega_des"].T)@JL@RLoad.T@RdesLoad@(ql["omega_des"].T)
+        
+        
+        diag_rot = np.array([[]])
+        for i in range(pl_params.nquad):
+            diag_rot = scipy.linalg.block_diag(diag_rot,RLoad)
 
-        # Net moment
-        # Missing the angular acceleration term but in general it is neglectable.
-        M = np.matmul(-pl_params.Kpe, e_angle) - np.matmul(pl_params.Kde, e_omega) # may need to be changed to scalar product
+        mu = (diag_rot@pl_params.pseudo_inv_P)@np.vstack((RLoad.T@forceDesiredLoad, MomentDesiredLoad))
 
-        # Cable tension distribution
-        diag_rot = np.zeros((0,0), dtype=float)
-        for i in range(1, nquad+1):
-            diag_rot = LA.block_diag(diag_rot, Rot)
 
-        mu = diag_rot @ pl_params.pseudo_inv_P @ np.append(Rot.T @ F, M, axis=0)
-        for i in range(1, nquad+1):
-            if (0>mu[3*i-1, 0]):
-                mu[3*i-1, 0] = 0 
-                print("mu is less than zero")
-            else:# Is this really necessary? 
-                mu[3*i-1, 0] = mu[3*i-1, 0]
-
-        att_acc_c = acceleration_des + g*e3 + np.matmul(np.matmul(np.matmul(Rot, omega_asym), omega_asym), pl_params.rho_vec_list)
-
-        # Quadrotor Attitude Controller
         qd_F = {}
         qd_M = {}
-        qd_rot_des = {}
-        qd_quat_des = {}
+        attach_acc_k = forceDesiredLoad/pl_params.mass + np.matmul(np.matmul(np.matmul(RLoad, omega_asym), omega_asym), pl_params.rho_vec_list)
+        for i in range(pl_params.nquad):
+            epsDes = -mu[3*i:3*i+3,0]/np.linalg.norm(mu[3*i:3*i+3,0])
+            esp_des_dot = np.array([[0.0],[0.0],[0.0]])
+            w_des = (np.cross(epsDes.T,esp_des_dot.T)).T
+            eps = qd[i]["xi"]
+            epsdot = qd[i]["xidot"]
+            rotquad = qd[i]["rot"] 
+            w = np.cross(eps.T, epsdot.T).T
+            error_eps = np.cross(epsDes.T, eps.T).T
+            e_w = w + np.cross(epsDes.T, np.cross(epsDes.T, w_des.T)).T
+           
+            
+            acc_k = attach_acc_k[:,i].reshape(3,1)
 
-        for qn in range(0, nquad):
-            qd[qn]["yaw_des"] = 0
-            qd[qn]["yawdot_des"] = 0
-            qd[qn]["mu_des"] = mu[3*qn:3*(qn+1)]
-            qd[qn]["attach_accel"] = att_acc_c[:,qn].reshape((3,1))
-            [F_qn, M_qn, Rot_des_qn] = self.cooperative_attitude_controller(qd, qn, qd_params)
-            qd_F[qn] = F_qn
-            qd_M[qn] = M_qn
-            qd_quat_des[qn] = tranrot.from_matrix(Rot_des_qn).as_quat() 
-            qd_rot_des[qn] = Rot_des_qn 
-    
-        #return qd_F, qd_M
-        return mu, att_acc_c, qd_F, qd_M, qd_quat_des, qd_rot_des
+            force_parallel = (eps@eps.T@mu[3*i:3*i+3,0]).reshape(3,1)+qd_params.mass*qd_params.l*(np.linalg.norm(w)**2)*eps+qd_params.mass*(eps@eps.T)@acc_k
+            keps = qd_params.Kxi 
+            kw = qd_params.Kw 
+            feedback = -keps@error_eps-kw@e_w - np.dot(eps.T,w_des)*epsdot
+            force_perpendicular = np.cross(qd_params.mass*qd_params.l*eps.T,feedback.T).T - \
+                        np.cross(pl_params.mass*qd_params.l*eps.T,np.cross(eps.T,np.cross(eps.T,w_des.T))).T - \
+                            np.cross(pl_params.mass*eps.T,np.cross(eps.T,acc_k.T)).T
+            force = force_parallel + force_perpendicular
+            qd_F[i] = force.T@(rotquad@e3)
+            
+            yawDes = qd[i]["yaw_des"]
+            yawdotDes = qd[i]["yawdot_des"]
+            
+            rotDes = np.zeros((3,3))
+
+            rotDes[:,2] = force/np.linalg.norm(force)
+            y_body = np.array([[-np.sin(yawDes)],[np.cos(yawDes)],[0]])
+            rotDes[:,0] = np.cross(y_body.T,rotDes[:,2].T).T   
+            rotDes[:,1] = np.cross(rotDes[:,2].T,rotDes[:,0].T).T  
+
+            
+            omegaDes = np.array([[0.0],[0.0],[rotDes[2,2]*yawdotDes]])
+            omega = qd[i]["omega"]
+
+            errR = 0.5*vee(rotquad.T@rotDes - rotDes.T@rotquad)
+            errOmega = rotquad.T@(rotDes@omegaDes.T) - omega
+
+            qd_M[i] = -qd_params.Kpe@errR-qd_params.Kde@errOmega+np.cross(omega,qd_params.I@omega)
+
+        
+        
+        return  qd_F, qd_M
 
     # untested
     def cooperative_payload_controller(self, ql, params):
+        print("inside controller2")
         if not params["sim_start"]:
             # self.coeff0 = params.coeff0
             self.icnt = 0

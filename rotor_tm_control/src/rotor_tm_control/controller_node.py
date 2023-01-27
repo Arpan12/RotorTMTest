@@ -32,7 +32,7 @@ class controller_node:
         # read yaml files
         read_params_funcs = read_params.read_params()
         self.pl_params, self.quad_params = read_params_funcs.system_setup(payload_params_path,uav_params_path,mechanism_params_path, payload_control_gain_path, uav_control_gain_path)
-
+        
         print("yaml read")
         print("#################")
         print("init contoller_node")
@@ -419,37 +419,24 @@ class controller_node:
     # and call respective controller. The return values from the controller
     # are then packaged into a FMCommand type ros message and published under /controller_#
     
+
     # INPUTS:
     # /                     - Attributes of the controller class are used      
 
     # OUTPUTS:
     # /                     - FMCommands are published
+        print("cable")
+
         if self.pl_params.mechanism_type == 'Rigid Link':
             ql = self.assembly_qd()
             F_list, M_list = self.controller.rigid_links_cooperative_payload_controller(ql, self.pl_params)
         elif self.pl_params.mechanism_type == 'Cable':
+            print("cable")
             if self.pl_params.payload_type == 'Rigid Body':
-                mu, att_acc, F_list, M_list, quat_list, rot_list = self.controller.cooperative_suspended_payload_controller(self.pl, self.qd, self.pl_params, self.quad_params)
-                cen_pl_command = CenPL_Command()
-                cen_pl_command.header.stamp = rospy.get_rostime()
-                cen_pl_command.header.frame_id = "simulator" 
-                cen_pl_command.copr_status = 3
-                for i in range(self.pl_params.nquad):
-                    acc_command = Vector3()
-                    acc_command.x = att_acc[0,i]
-                    acc_command.y = att_acc[1,i]
-                    acc_command.z = att_acc[2,i]
-
-                    mu_command = Vector3()
-                    mu_command.x = mu[3*i,0]
-                    mu_command.y = mu[3*i+1,0]
-                    mu_command.z = mu[3*i+2,0]
-
-                    cen_pl_command.acc.append(acc_command)
-                    cen_pl_command.mu.append(mu_command)
-                    cen_pl_command.estimated_acc.append(acc_command)
-
-                self.cen_pl_cmd_pub.publish(cen_pl_command)
+                print("suspended")
+                F_list=0
+                F_list, M_list = self.controller.cooperative_suspended_payload_controller(self.pl, self.qd, self.pl_params, self.quad_params)
+                
             elif self.pl_params.payload_type == 'Point Mass':
                 plqd = self.assembly_plqd()
                 F_list, M_list = self.controller.single_payload_geometric_controller(ql = plqd, pl_params = self.pl_params, qd_params = self.quad_params)
@@ -458,7 +445,8 @@ class controller_node:
             for i in range(self.pl_params.nquad):
                 FM_message = self.assembly_FM_message(F_list, M_list, i)
                 self.FM_pub[i].publish(FM_message)
-        else:
+                
+        else: 
             FM_message = self.assembly_FM_message(F_list, M_list, self.node_id)
             self.FM_pub[0].publish(FM_message)
 
