@@ -9,7 +9,9 @@ from scipy.spatial.transform import Rotation as rot_math
 from visualization_msgs.msg import MarkerArray, Marker
 from nav_msgs.msg import Odometry, Path
 from geometry_msgs.msg import PoseStamped
-from rotor_tm_msgs.msg import RPMCommand, FMCommand 
+#from rotor_tm_msgs.msg import RPMCommand, FMCommand 
+from rotor_tm_msgs.msg import RPMCommand
+from quadrotor_msgs.msg import FMCommand
 from rotor_tm_utils import utilslib, rosutilslib
 from rotor_tm_utils.vee import vee
 from rotor_tm_utils import utilslib
@@ -233,8 +235,9 @@ class simulation_base():
           mav_name = self.mav_name + str(uav_id+1)
           controller_name = "/controller_" + str(uav_id+1)
           self.robot_command_subscriber.append(rospy.Subscriber(controller_name + '/' + mav_name + '/rpm_cmd',RPMCommand,self.rpm_command_callback,uav_id,queue_size=1, tcp_nodelay=True))
-          self.robot_command_subscriber.append(rospy.Subscriber(controller_name + '/' + mav_name + '/fm_cmd',FMCommand,self.fm_command_callback,uav_id,queue_size=1, tcp_nodelay=True))
-    
+          # self.robot_command_subscriber.append(rospy.Subscriber(controller_name + '/' + mav_name + '/fm_cmd',FMCommand,self.fm_command_callback,uav_id,queue_size=1, tcp_nodelay=True))
+          self.robot_command_subscriber.append(rospy.Subscriber( '/' + mav_name + '/fm_cmd',FMCommand,self.fm_command_callback,uav_id,queue_size=1, tcp_nodelay=True))
+
       # Visualization Init
       self.cable_marker_scale = 0.01 * np.ones(3)
       self.cable_marker_color = np.array([1.0,0.5,0.5,0.5])
